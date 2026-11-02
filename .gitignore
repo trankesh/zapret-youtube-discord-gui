@@ -1,0 +1,15 @@
+build/
+build-next/
+data/
+artifacts/
+dist/
+.codex/
+.agents/
+*.user
+*.log
+*.pdb
+portable.mode
+installed.mode
+settings.json
+last-results.*
+backups/

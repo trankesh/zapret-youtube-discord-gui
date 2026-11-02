@@ -1,0 +1,25 @@
+name: Ошибка
+description: Сообщить о проблеме в GUI
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Версия GUI и набора Flowseal
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Версия Windows и масштаб экрана
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Шаги и результат
+      description: Что произошло и какое поведение ожидалось?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Скриншоты и фрагмент журнала
+      description: Перед отправкой уберите личные пути, имена пользователей и адреса вашей сети.
