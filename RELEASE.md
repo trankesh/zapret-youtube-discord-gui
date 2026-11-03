@@ -1,6 +1,6 @@
 # Выпуск версии
 
-Текущая стабильная версия: **1.0.0**.
+Текущая стабильная версия: **1.0.1**. Файлы и контрольные суммы доступны в [GitHub Releases](https://github.com/trankesh/zapret-youtube-discord-gui/releases/tag/v1.0.1).
 
 ## Сборка
 

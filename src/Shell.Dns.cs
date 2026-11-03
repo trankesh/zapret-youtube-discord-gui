@@ -12,12 +12,13 @@ namespace ZapretDesktop
     {
         UIElement DnsCard()
         {
-            return Card(Stack(Label("ЗАЩИЩЁННЫЙ DNS"), Text("Защищённый DNS шифрует запросы адресов сайтов. Этот шаг можно пропустить и вернуться к нему позже.", 14, Muted), new Border { Height=14 }, Wide("Выбрать DNS-сервер", OpenDns), Button("Как настроить Secure DNS?", DnsGuide, false, false)));
+            return Card(Stack(HelpHeader("ЗАЩИЩЁННЫЙ DNS",DnsGuide), Text("Шифрует запросы адресов сайтов. Необязательная настройка.", 14, Muted), new Border { Height=14 }, Wide("Выбрать DNS-сервер", OpenDns)));
         }
         void OpenDns() { DnsSurface().ShowDialog(); }
         Window DnsSurface()
         {
             var content = new StackPanel();
+            content.Children.Add(HelpHeader("НАСТРОЙКА DNS",DnsGuide));
             content.Children.Add(Text("Выбери подключение и провайдера. Изменения сохраняются в Windows и действуют после закрытия Zapret.",14,Muted)); Gap(content,16);
             content.Children.Add(Label("ПОДКЛЮЧЕНИЕ"));
             var adapters = new ComboBox { Margin=new Thickness(0,4,0,12) }; content.Children.Add(adapters);
@@ -33,10 +34,10 @@ namespace ZapretDesktop
                 details.Children.Add(Text(provider.Description,15,null)); Gap(details,8);
                 details.Children.Add(Text(String.Join(" · ",provider.V4),14,Muted)); Gap(details,8);
                 details.Children.Add(Text(provider.Template,14,Muted));
-                if (apply != null) apply.IsEnabled=supported && adapters.SelectedItem != null && !working;
+                if (apply != null) apply.IsEnabled=supported && adapters.SelectedItem != null && ((DnsAdapter)adapters.SelectedItem).DohSupported && !working;
                 if (restore != null) restore.IsEnabled=!String.IsNullOrEmpty(settings.DnsBackup) && File.Exists(settings.DnsBackup) && !working;
             };
-            adapters.SelectionChanged += (s,e) => { var adapter=adapters.SelectedItem as DnsAdapter; current.Text=adapter==null ? "Выбери активное подключение." : "Текущие DNS: " + String.Join(", ",adapter.Servers ?? new string[0]); update(); };
+            adapters.SelectionChanged += (s,e) => { var adapter=adapters.SelectedItem as DnsAdapter; current.Text=adapter==null ? "Выбери активное подключение." : "Текущие DNS: " + String.Join(", ",adapter.Servers ?? new string[0])+"\nDoH на адаптере: "+(adapter.DohEnabled==true ? "включён" : "не подтверждён"); update(); };
             providers.SelectionChanged += (s,e) => update();
             Func<Func<Task>,Task> run = async job => {
                 if (working || busy) return;
@@ -46,12 +47,12 @@ namespace ZapretDesktop
                 finally { working=false; busy=false; dialog.IsEnabled=true; update(); }
             };
             Func<Task> read = async () => {
-                DnsState state = preview ? new DnsState { Doh=true, Adapters=new[]{new DnsAdapter { Guid="00000000-0000-0000-0000-000000000001", Name="Wi-Fi · пример", Servers=new[]{"192.168.1.1"} }} } : await SecureDns.Read(CancellationToken.None);
+                DnsState state = preview ? new DnsState { Doh=true, Adapters=new[]{new DnsAdapter { Guid="00000000-0000-0000-0000-000000000001", Name="Wi-Fi · пример", Servers=new[]{"192.168.1.1"},DohSupported=true,DohEnabled=false }} } : await SecureDns.Read(CancellationToken.None);
                 var previous=adapters.SelectedItem as DnsAdapter;
                 supported=state.Doh; adapters.ItemsSource=state.Adapters ?? new DnsAdapter[0];
                 adapters.SelectedItem=previous==null ? null : (state.Adapters ?? new DnsAdapter[0]).FirstOrDefault(a=>a.Guid==previous.Guid);
                 if (adapters.SelectedItem==null && adapters.Items.Count>0) adapters.SelectedIndex=0;
-                note.Text=supported ? "Будет включён DoH без перехода на обычные незашифрованные запросы. Перед изменением сохраняется копия настроек." : "Системный DoH недоступен. На Windows 10 включи Secure DNS в браузере по инструкции ниже. Настройки Windows не будут изменены.";
+                note.Text=supported ? "Будет включён DoH без перехода на обычные незашифрованные запросы. Перед изменением сохраняется копия настроек." : "Системный DoH недоступен. Включи Secure DNS в браузере: инструкция открывается значком «?» вверху. Настройки Windows не будут изменены.";
                 if (adapters.Items.Count==0) current.Text="Нет подключённых сетевых адаптеров. Подключись к Wi-Fi или Ethernet и обнови список.";
             };
             apply=Button("Применить DNS over HTTPS", () => { var ignored=run(async () => {
@@ -75,7 +76,6 @@ namespace ZapretDesktop
                 settings.DnsProviderId=null; Save(); await read(); note.Text="Прежние настройки DNS восстановлены."; AddLog(note.Text);
             }); },false,false); restore.HorizontalAlignment=HorizontalAlignment.Stretch; content.Children.Add(restore);
             content.Children.Add(Button("Обновить подключения", () => { var ignored=run(read); },false,false));
-            content.Children.Add(Button("Инструкция и адреса DNS",DnsGuide,false,false));
             dialog=Surface("Защищённый DNS",content,null);
             dialog.Closing += (s,e) => { if (working) e.Cancel=true; };
             dialog.Loaded += (s,e) => { var ignored=run(read); };

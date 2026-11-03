@@ -25,76 +25,86 @@ namespace ZapretDesktop
         {
             var button = Button(label, action, primary); button.HorizontalAlignment = HorizontalAlignment.Stretch; button.Margin = new Thickness(0, 0, 0, 10); return button;
         }
+        CancellationTokenSource setupCheck;
+        bool checkingLists;
+        void StopSetupCheck() { if (setupCheck!=null) setupCheck.Cancel(); }
+        void SetupStep(int step)
+        {
+            StopSetupCheck(); setupStep=step; RenderSetup();
+            if (step==2 && !preview) { var ignored=CheckSetupLists(); }
+        }
+        async Task CheckSetupLists()
+        {
+            var check=new CancellationTokenSource(); setupCheck=check;
+            try { await CheckPrerequisites(check.Token); }
+            catch (OperationCanceledException) { }
+            catch (Exception error) { AddLog("Проверка списков: "+error.Message); }
+            finally { if (setupCheck==check) { setupCheck=null; RefreshUpdates(); } check.Dispose(); }
+        }
         void RenderSetup()
         {
-            actions.Clear(); leaveEditor = null; gameToggle = null; gameCaption = null; testResults = null; testProgress = null; serviceState = null; logItems = null; connect = null; installedVersionText = null;
-            strategyOverlay = null; homeRoot = null; currentPage = "Setup";
-            ((RowDefinition)Window.FindName("HeaderRow")).Height = new GridLength(58);
-            ((RowDefinition)Window.FindName("FooterRow")).Height = new GridLength(0);
-            ((RowDefinition)Window.FindName("NavigationRow")).Height = new GridLength(0);
-            Find<Grid>("HeaderBar").Visibility = Visibility.Visible; Find<StackPanel>("PageHeader").Visibility = Visibility.Visible;
-            Find<Border>("BottomNavigation").Visibility = Visibility.Collapsed; Find<TextBlock>("StatusLine").Visibility = Visibility.Collapsed;
-            Find<Grid>("PageLayout").Margin = new Thickness(20, 6, 20, 16);
-            Find<TextBlock>("PageTitle").Text = "Подготовка Zapret";
-            Find<TextBlock>("PageSubtitle").Text = "Шаг " + setupStep + " из 4 · " + (setupStep == 1 ? "Набор конфигураций" : setupStep == 2 ? "Hosts и IPSet" : setupStep == 3 ? "Защищённый DNS" : "Завершение настройки");
-            var content = new StackPanel(); var navigation = new StackPanel();
-            if (setupStep == 1) {
+            actions.Clear(); leaveEditor=null; gameToggle=null; gameCaption=null; testResults=null; testProgress=null; serviceState=null; logItems=null; connect=null; installedVersionText=null;
+            strategyOverlay=null; homeRoot=null; currentPage="Setup";
+            ((RowDefinition)Window.FindName("HeaderRow")).Height=new GridLength(58);
+            ((RowDefinition)Window.FindName("FooterRow")).Height=new GridLength(0);
+            ((RowDefinition)Window.FindName("NavigationRow")).Height=new GridLength(0);
+            Find<Grid>("HeaderBar").Visibility=Visibility.Visible; Find<StackPanel>("PageHeader").Visibility=Visibility.Visible;
+            Find<Border>("BottomNavigation").Visibility=Visibility.Collapsed; Find<TextBlock>("StatusLine").Visibility=Visibility.Collapsed;
+            Find<Grid>("PageLayout").Margin=new Thickness(20,6,20,16);
+            Find<TextBlock>("PageTitle").Text="Подготовка Zapret";
+            Find<TextBlock>("PageSubtitle").Text="Шаг "+setupStep+" из 4 · "+(setupStep==1 ? "Набор Zapret" : setupStep==2 ? "Обновление списков" : setupStep==3 ? "Защищённый DNS" : "Всё готово к запуску");
+            var content=new StackPanel(); var navigation=new StackPanel();
+            if (setupStep==1) {
+                content.Children.Add(HelpHeader("ПОДКЛЮЧИМ НАБОР",BundleGuide));
+                content.Children.Add(Text("Используй встроенный набор или выбери папку со скачанным Flowseal.",16,null)); Gap(content,18);
                 if (bundleProblem!=null && !String.IsNullOrWhiteSpace(Root)) {
-                    var notice=Card(Stack(Text("Набор Flowseal недоступен",19,Accent),new Border {Height=10},Text(bundleProblem,15,null),new Border {Height=10},Text("Прежняя папка: " + Root,14,Muted)));
-                    notice.Padding=new Thickness(16); content.Children.Add(notice); Gap(content,16);
+                    content.Children.Add(Card(Stack(Text("Папка набора недоступна",17,null),new Border {Height=8},Text("Выбери новое расположение или встроенный набор.",14,Muted)))); Gap(content,14);
                     if (engine.Running || Engine.ServiceState()=="Running" && Engine.ServiceMatches(Root))
-                        content.Children.Add(Wide("Отключить прежнее подключение",()=>{ var ignored=Guard(async token=>{ if (engine.Running) engine.Stop(); if (Engine.ServiceState()=="Running" && Engine.ServiceMatches(Root)) await Engine.ServiceAction(Root,"stop",token); RenderSetup(); },true); }));
+                        content.Children.Add(Wide("Отключить прежний Zapret",()=>{ var ignored=Guard(async token=>{ if(engine.Running) engine.Stop(); if(Engine.ServiceState()=="Running" && Engine.ServiceMatches(Root)) await Engine.ServiceAction(Root,"stop",token); RenderSetup(); },true); }));
                 }
-                content.Children.Add(Text("Выбери набор Zapret", 20, null)); Gap(content, 12);
-                content.Children.Add(Text("Набор Flowseal содержит файлы и готовые варианты обхода. Выбери распакованную папку или используй набор, который уже включён в EXE. Этот шаг обязателен; остальные можно пропустить.", 14, Muted)); Gap(content, 20);
-                content.Children.Add(Wide("Выбрать папку…", SelectSetupFolder, true));
-                content.Children.Add(Wide("Встроенный Flowseal " + EmbeddedBundle.Version, () => { var ignored = Guard(async token => {
-                    string root = await Task.Run(() => EmbeddedBundle.Extract(data), token); token.ThrowIfCancellationRequested(); SetSetupRoot(root);
-                }, true); }));
-                content.Children.Add(Button("Как скачать свежий набор?", BundleGuide, false, false)); Gap(content, 16);
+                content.Children.Add(Wide("Встроенный Flowseal "+EmbeddedBundle.Version,()=>{ var ignored=Guard(async token=>{ string root=await Task.Run(()=>EmbeddedBundle.Extract(data),token); token.ThrowIfCancellationRequested(); SetSetupRoot(root); },true); },!Ready));
+                content.Children.Add(Wide("Выбрать папку…",SelectSetupFolder));
+                content.Children.Add(Wide("Скачать свежий Flowseal ↗",OpenFlowsealReleases)); Gap(content,8);
                 if (Ready) {
-                    var found = Stack(Text("Подключён Flowseal " + Bundle.Version(Root), 16, Accent), new Border { Height = 8 }, Text(Root, 14, Muted)); content.Children.Add(Card(found)); Gap(content, 16);
-                    navigation.Children.Add(Wide("Продолжить настройку", () => { Bundle.ValidateForSetup(Root); setupStep = 2; RenderSetup(); }, true));
-                    navigation.Children.Add(Button("Пропустить остальные шаги",()=>FinishSetup(false),false,false));
-                }
-            }
-            else if (setupStep == 2) {
-                content.Children.Add(Text("Проверим списки", 20, null)); Gap(content, 10);
-                content.Children.Add(Text("Необязательный шаг. Эти списки помогают Zapret находить нужные адреса сайтов. Обновить их можно сейчас или позже в настройках.", 14, Muted)); Gap(content, 18);
-                content.Children.Add(UpdateCard()); Gap(content, 14);
-                navigation.Children.Add(Wide(hostsPlan != null && hostsPlan.Current && ipsetCurrent ? "Далее" : "Пропустить этот шаг", () => { setupStep = 3; RenderSetup(); }, true));
-                navigation.Children.Add(Button("Назад к выбору набора", () => { setupStep = 1; RenderSetup(); }, false, false));
-                content.Children.Add(Text("Если проверка недоступна, можно продолжить и вернуться к обновлениям в настройках.", 14, Muted));
-            }
-            else if (setupStep == 3) {
-                content.Children.Add(Text("Сделаем DNS защищённее", 22, null)); Gap(content, 12);
-                content.Children.Add(Text("Рекомендуемый шаг · можно пропустить. DoH шифрует DNS-запросы и помогает против их подмены. Доступность зависит от сети и выбранного сервера.", 14, Muted)); Gap(content, 18);
-                content.Children.Add(DnsCard()); Gap(content, 14);
-                navigation.Children.Add(Wide("Далее", () => { setupStep=4; RenderSetup(); },true));
-                navigation.Children.Add(Button("Пропустить и открыть Zapret",()=>FinishSetup(false),false,false));
-                navigation.Children.Add(Button("Назад к hosts и IPSet", () => { setupStep=2; RenderSetup(); },false,false));
-            }
-            else {
-                content.Children.Add(Text(hostsPlan != null && hostsPlan.Current && ipsetCurrent ? "Всё подготовлено" : "Набор подключён", 22, null)); Gap(content, 14);
-                if (hostsPlan == null || !hostsPlan.Current || !ipsetCurrent) { content.Children.Add(Text("Необязательные шаги можно выполнить позже в настройках.", 14, Muted)); Gap(content, 14); }
-                content.Children.Add(Card(Stack(Text("Набор: " + (Ready ? "Flowseal " + Bundle.Version(Root) : "не выбран"), 16, null), new Border { Height = 12 }, Text("Hosts: " + hostsNote, 14, Muted), new Border { Height = 10 }, Text("IPSet: " + ipsetNote, 14, Muted)))); Gap(content, 18);
-                content.Children.Add(Text("На главной нажми «Подключить». Если сайты не открываются, запусти автоподбор стратегии. Крестик скрывает приложение в трей.", 14, Muted)); Gap(content, 18);
-                content.Children.Add(Wide("Открыть Zapret", () => FinishSetup(false), true));
-                content.Children.Add(Wide("Перейти к автоподбору", () => FinishSetup(true)));
-                content.Children.Add(Button("Назад к настройке DNS", () => { setupStep = 3; RenderSetup(); }, false, false));
+                    var location=Text(Root,14,Muted); location.TextWrapping=TextWrapping.NoWrap; location.TextTrimming=TextTrimming.CharacterEllipsis; location.ToolTip=Root;
+                    content.Children.Add(Card(Stack(Text("Набор выбран · Flowseal "+Bundle.Version(Root),16,Accent),new Border {Height=8},location)));
+                    navigation.Children.Add(Wide("Далее",()=>{ Bundle.ValidateForSetup(Root); SetupStep(2); },true));
+                    navigation.Children.Add(Wide("Пропустить остальные шаги",()=>FinishSetup(false)));
+                } else content.Children.Add(Text("Выбор набора обязателен. Остальную настройку можно пропустить.",14,Muted));
+            } else if (setupStep==2) {
+                content.Children.Add(Text("Обновим адреса сайтов",21,null)); Gap(content,10);
+                content.Children.Add(Text("Списки проверяются автоматически. Обновление можно пропустить.",14,Muted)); Gap(content,16);
+                content.Children.Add(UpdateCard());
+                bool updates=hostsPlan!=null && !hostsPlan.Current || ipsetRemote!=null && !ipsetCurrent;
+                navigation.Children.Add(Wide(checkingLists || updates ? "Пропустить" : "Далее",()=>SetupStep(3),!checkingLists && !updates));
+                navigation.Children.Add(Wide("Назад",()=>SetupStep(1)));
+            } else if (setupStep==3) {
+                content.Children.Add(Text("Защитим DNS-запросы",21,null)); Gap(content,10);
+                content.Children.Add(Text("Это помогает против подмены адресов сайтов. Можно настроить сейчас или позже в настройках.",14,Muted)); Gap(content,16);
+                content.Children.Add(DnsCard());
+                navigation.Children.Add(Wide("Далее",()=>SetupStep(4),true));
+                navigation.Children.Add(Wide("Назад",()=>SetupStep(2)));
+            } else {
+                content.Children.Add(Text("Zapret готов к запуску",23,null)); Gap(content,12);
+                content.Children.Add(Text("Теперь найдём стратегию, которая подходит твоему подключению. Автоподбор проверит варианты и покажет результат.",16,null)); Gap(content,18);
+                content.Children.Add(Card(Stack(Text("Flowseal "+(Ready ? Bundle.Version(Root) : "не выбран"),17,null),new Border {Height=10},Text("Необязательные настройки доступны в любое время в разделе «Настройки».",14,Muted))));
+                navigation.Children.Add(Wide("Подобрать стратегию",()=>FinishSetup(true),true));
+                navigation.Children.Add(Wide("Пропустить и открыть главную",()=>FinishSetup(false)));
+                navigation.Children.Add(Wide("Назад",()=>SetupStep(3)));
             }
             var layout=new Grid(); layout.RowDefinitions.Add(new RowDefinition()); layout.RowDefinitions.Add(new RowDefinition {Height=GridLength.Auto});
-            layout.Children.Add(Scroll(content)); navigation.Margin=new Thickness(0,12,0,0); Grid.SetRow(navigation,1); layout.Children.Add(navigation);
-            Find<ContentControl>("Page").Content = layout;
-            if (busy) foreach (var button in actions) button.IsEnabled = false;
+            layout.Children.Add(Scroll(content)); navigation.Margin=new Thickness(0,16,0,0); Grid.SetRow(navigation,1); layout.Children.Add(navigation);
+            Find<ContentControl>("Page").Content=layout;
+            if(busy) foreach(var button in actions) button.IsEnabled=false;
         }
+        void OpenFlowsealReleases() { System.Diagnostics.Process.Start("https://github.com/Flowseal/zapret-discord-youtube/releases/latest"); }
         void FinishSetup(bool tests)
         {
-            NeedBundle(); Bundle.ValidateForSetup(Root); settings.SetupVersion = 1; Save(); setupVisible = false; Navigate(tests ? "Tests" : "Home");
+            StopSetupCheck(); NeedBundle(); Bundle.ValidateForSetup(Root); settings.SetupVersion = 1; Save(); setupVisible = false; Navigate(tests ? "Tests" : "Home");
         }
         void SetSetupRoot(string root)
         {
-            Bundle.ValidateForSetup(root);
+            StopSetupCheck(); Bundle.ValidateForSetup(root);
             bool same=!String.IsNullOrWhiteSpace(Root) && AutoStart.SamePath(Root,root);
             if (!same && (Engine.AnyWinws() || Engine.ServiceState() == "Running")) throw new InvalidOperationException("Сначала отключи работающий Zapret. Если он запущен другой программой, отключи его в той программе. Затем выбери новую папку.");
             settings.Root = root; settings.SetupVersion = 0; settings.Strategy = null; ipsetRemote = null; ipsetCurrent = false; ipsetNote = "Ещё не проверяли";
@@ -114,28 +124,27 @@ namespace ZapretDesktop
         }
         UIElement UpdateCard()
         {
-            var content = Stack(Label("HOSTS И IPSET"), Text("Hosts: " + hostsNote, 14, Muted), new Border { Height = 10 }, Text("IPSet: " + ipsetNote, 14, Muted)); Gap(content, 16);
-            var dnsHosts = new CheckBox { IsChecked=settings.IncludeDnsHosts };
-            dnsHosts.Click += (s,e) => { settings.IncludeDnsHosts=dnsHosts.IsChecked==true; hostsPlan=hostsRemote==null ? null : HostsUpdate.Plan(HostsUpdate.SystemPath,SecureDns.HostsSource(hostsRemote,settings.IncludeDnsHosts)); hostsNote=hostsPlan==null ? "проверь актуальность" : hostsPlan.Current ? "актуален" : "есть изменения, открой предпросмотр"; Save(); RefreshUpdates(); };
-            content.Children.Add(ToggleRow("Адреса Secure DNS в hosts", "Добавляет известные адреса DNS-серверов. Запишется только по кнопке «Обновить hosts».",dnsHosts)); Gap(content,12);
-            content.Children.Add(Wide("Проверить актуальность", () => { var ignored = Guard(CheckPrerequisites, false); }));
-            var updateButtons = ButtonGrid(2, Button("Обновить hosts", () => { var ignored = Guard(UpdateHosts, true); }, true), Button("Обновить IPSet", () => { var ignored = Guard(InstallIpSet, true); }));
-            updateButtons.Margin = new Thickness(0, 0, 0, 12); content.Children.Add(updateButtons);
-            content.Children.Add(Button("Как обновить hosts?", HostsGuide, false, false));
-            if (hostsPlan != null && !hostsPlan.Current) content.Children.Add(Button("Посмотреть изменения hosts", () => ShowReport("Предпросмотр hosts", hostsPlan.Text), false, false));
-            if (settings.HostsReceipt != null) content.Children.Add(Button("Восстановить hosts из копии", () => { var ignored = Guard(RestoreHosts, true); }));
-            return Card(content);
+            var content=Stack(HelpHeader("HOSTS И IPSET",HostsGuide),Text("Hosts: "+hostsNote,14,Muted),new Border {Height=8},Text("IPSet: "+ipsetNote,14,Muted)); Gap(content,16);
+            var dnsHosts=new CheckBox {IsChecked=settings.IncludeDnsHosts,IsEnabled=!checkingLists};
+            dnsHosts.Click+=(s,e)=>{ settings.IncludeDnsHosts=dnsHosts.IsChecked==true; hostsPlan=hostsRemote==null ? null : HostsUpdate.Plan(HostsUpdate.SystemPath,SecureDns.HostsSource(hostsRemote,settings.IncludeDnsHosts)); hostsNote=hostsPlan==null ? "ещё не проверяли" : hostsPlan.Current ? "актуален" : "доступно обновление"; Save(); RefreshUpdates(); };
+            var dnsRow=(FrameworkElement)ToggleRow("Адреса DNS в hosts","Добавляются при обновлении списков.",dnsHosts); dnsRow.Margin=new Thickness(0,0,0,6); content.Children.Add(dnsRow); Gap(content,12);
+            bool updates=hostsPlan!=null && !hostsPlan.Current || ipsetRemote!=null && !ipsetCurrent;
+            var update=Wide("Обновить hosts и IPSet",()=>{ var ignored=Guard(UpdateLists,true); },updates && !checkingLists);
+            update.IsEnabled=!checkingLists; content.Children.Add(update);
+            var check=Wide(checkingLists ? "Проверяем обновления…" : "Проверить снова",()=>{ var ignored=Guard(CheckPrerequisites,false); }); check.IsEnabled=!checkingLists; content.Children.Add(check);
+            var card=Card(content); card.Padding=new Thickness(16); return card;
         }
+        int listCheckGeneration;
         async Task CheckPrerequisites(CancellationToken token)
         {
-            NeedBundle(); hostsNote = "Проверяем…"; ipsetNote = "Проверяем…"; RefreshUpdates();
-            await Task.WhenAll(CheckHosts(token), CheckIpSet(token));
-            Save(); RefreshUpdates();
+            NeedBundle(); int generation=++listCheckGeneration; checkingLists=true; hostsNote="Проверяем…"; ipsetNote="Проверяем…"; RefreshUpdates();
+            try { await Task.WhenAll(CheckHosts(token),CheckIpSet(token)); token.ThrowIfCancellationRequested(); Save(); }
+            finally { if(generation==listCheckGeneration) { checkingLists=false; RefreshUpdates(); } }
         }
         async Task CheckHosts(CancellationToken token)
         {
             try {
-                hostsRemote = await HostsUpdate.Download(HostsUpdate.Url, token); hostsPlan = HostsUpdate.Plan(HostsUpdate.SystemPath, SecureDns.HostsSource(hostsRemote,settings.IncludeDnsHosts));
+                string downloaded=await HostsUpdate.Download(HostsUpdate.Url,token); token.ThrowIfCancellationRequested(); hostsRemote=downloaded; hostsPlan = HostsUpdate.Plan(HostsUpdate.SystemPath, SecureDns.HostsSource(hostsRemote,settings.IncludeDnsHosts));
                 hostsNote = hostsPlan.Current ? "актуален" : "нужно обновить: +" + hostsPlan.Added + ", заменить " + hostsPlan.Changed + ", удалить " + hostsPlan.Removed;
                 if (hostsPlan.Current) settings.HostsCheckedAt = DateTimeOffset.Now.ToString("o");
             }
@@ -151,7 +160,7 @@ namespace ZapretDesktop
         async Task CheckIpSet(CancellationToken token)
         {
             try {
-                ipsetRemote = await HostsUpdate.Download(IpsetUrl, token); string expected = CanonicalIpSet(ipsetRemote);
+                string downloaded=await HostsUpdate.Download(IpsetUrl,token); token.ThrowIfCancellationRequested(); ipsetRemote=downloaded; string expected = CanonicalIpSet(ipsetRemote);
                 string file = Path.Combine(Root, "lists", "ipset-all.txt"); if (Bundle.IpMode(Root) != "loaded") file += ".backup";
                 ipsetCurrent = false;
                 if (File.Exists(file)) { try { ipsetCurrent = expected == CanonicalIpSet(File.ReadAllText(file)); } catch (InvalidDataException) { } }
@@ -161,46 +170,41 @@ namespace ZapretDesktop
             catch (OperationCanceledException) { token.ThrowIfCancellationRequested(); ipsetRemote = null; ipsetCurrent = false; ipsetNote = "истекло время ожидания; повтори проверку"; }
             catch (Exception e) { ipsetRemote = null; ipsetCurrent = false; ipsetNote = "не удалось проверить: " + e.Message; AddLog(ipsetNote); }
         }
-        async Task UpdateHosts(CancellationToken token)
-        {
-            Engine.RequireAdmin(); await CheckHosts(token);
-            if (hostsPlan == null) throw new IOException(hostsNote);
-            if (hostsPlan.Current) { Save(); RefreshUpdates(); return; }
-            if (MessageBox.Show(Window, "Будет добавлено доменов: " + hostsPlan.Added + ".\nБудут заменены адреса доменов: " + hostsPlan.Changed + ".\nУдалено устаревших доменов из блока приложения: " + hostsPlan.Removed + ".\n\n" + (settings.IncludeDnsHosts ? "Включены официальные адреса Secure DNS.\n" : "") + "Остальные записи сохранятся. Перед записью создаётся резервная копия. Применить обновление?", "Обновление hosts", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) { RefreshUpdates(); return; }
-            token.ThrowIfCancellationRequested();
-            var receipt = HostsUpdate.Apply(hostsPlan, BackupDirectory);
-            if (receipt != null) { settings.HostsReceipt = receipt; AddLog("Hosts обновлён. Резервная копия: " + receipt.Backup); }
-            settings.HostsCheckedAt = DateTimeOffset.Now.ToString("o"); Save();
-            hostsPlan = HostsUpdate.Plan(HostsUpdate.SystemPath, SecureDns.HostsSource(hostsRemote,settings.IncludeDnsHosts)); hostsNote = "обновлён";
-            try { await Engine.RunTool("ipconfig.exe", new[] { "/flushdns" }, CancellationToken.None); }
-            catch (Exception e) { AddLog("Hosts сохранён, очистка DNS не выполнена: " + e.Message); hostsNote += "; перезапусти браузер"; }
-            RefreshUpdates();
-        }
         async Task InstallIpSet(CancellationToken token)
         {
-            NeedBundle(); EnsureStopped(true);
-            await CheckIpSet(token); if (ipsetRemote == null) throw new IOException(ipsetNote);
-            NeedBundle();
-            if (!ipsetCurrent) {
-                token.ThrowIfCancellationRequested(); EnsureStopped(true);
-                string file = Path.Combine(Root, "lists", "ipset-all.txt"); if (Bundle.IpMode(Root) != "loaded") file += ".backup";
-                Bundle.WriteBackup(file, ipsetRemote); AddLog("IPSet обновлён. Режим фильтра сохранён.");
-            }
-            ipsetCurrent = true; ipsetNote = "актуален"; settings.IpsetCheckedAt = DateTimeOffset.Now.ToString("o"); Save(); RefreshUpdates();
+            NeedBundle(); EnsureStopped(true); await CheckIpSet(token);
+            if(ipsetRemote==null) throw new IOException(ipsetNote);
+            token.ThrowIfCancellationRequested(); NeedBundle(); EnsureStopped(true);
+            if(!ipsetCurrent) { string file=Path.Combine(Root,"lists","ipset-all.txt"); if(Bundle.IpMode(Root)!="loaded") file+=".backup"; Bundle.WriteBackup(file,ipsetRemote); }
+            ipsetCurrent=true; ipsetNote="актуален"; settings.IpsetCheckedAt=DateTimeOffset.Now.ToString("o"); Save(); RefreshUpdates();
         }
-        async Task RestoreHosts(CancellationToken token)
+        async Task UpdateLists(CancellationToken token)
         {
-            Engine.RequireAdmin();
-            if (MessageBox.Show(Window, "Восстановить hosts из резервной копии последнего обновления?", "Откат hosts", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
-            HostsUpdate.Restore(HostsUpdate.SystemPath, settings.HostsReceipt, BackupDirectory); settings.HostsReceipt = null; settings.HostsCheckedAt = null; Save();
-            hostsPlan = null; hostsNote = "восстановлен из копии";
-            try { await Engine.RunTool("ipconfig.exe", new[] { "/flushdns" }, CancellationToken.None); } catch (Exception e) { AddLog("Не удалось очистить DNS: " + e.Message); }
-            RefreshUpdates();
+            Engine.RequireAdmin(); NeedBundle(); await CheckPrerequisites(token);
+            if(hostsPlan==null || ipsetRemote==null) throw new IOException("Не удалось получить оба списка. Проверь подключение и попробуй снова. Текущие файлы не изменены.");
+            bool updateHosts=!hostsPlan.Current, updateIpset=!ipsetCurrent;
+            if(!updateHosts && !updateIpset) return;
+            if(updateIpset) EnsureStopped(true);
+            if(updateHosts && MessageBox.Show(Window,"Обновить списки адресов?\n\nHosts: добавить доменов "+hostsPlan.Added+", изменить "+hostsPlan.Changed+", убрать устаревших "+hostsPlan.Removed+".\nIPSet: "+(updateIpset ? "обновить" : "уже актуален")+".\n\nДругие записи hosts сохранятся. Перед записью будет создана резервная копия.","Обновление hosts и IPSet",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes) return;
+            token.ThrowIfCancellationRequested(); NeedBundle();
+            if(updateIpset) EnsureStopped(true);
+            if(updateHosts) {
+                var receipt=HostsUpdate.Apply(hostsPlan,BackupDirectory);
+                if(receipt!=null) settings.HostsReceipt=receipt;
+                hostsPlan=HostsUpdate.Plan(HostsUpdate.SystemPath,SecureDns.HostsSource(hostsRemote,settings.IncludeDnsHosts));
+                hostsNote="актуален"; settings.HostsCheckedAt=DateTimeOffset.Now.ToString("o"); Save();
+            }
+            if(updateIpset) {
+                string file=Path.Combine(Root,"lists","ipset-all.txt"); if(Bundle.IpMode(Root)!="loaded") file+=".backup";
+                Bundle.WriteBackup(file,ipsetRemote); ipsetCurrent=true; ipsetNote="актуален"; settings.IpsetCheckedAt=DateTimeOffset.Now.ToString("o"); Save();
+            }
+            if(updateHosts) try { await Engine.RunTool("ipconfig.exe",new[]{"/flushdns"},CancellationToken.None); } catch(Exception error) { AddLog("Списки сохранены. Перезапусти браузер: "+error.Message); }
+            AddLog("Hosts и IPSet обновлены."); RefreshUpdates();
         }
-        void RefreshUpdates() { if (setupVisible) RenderSetup(); else if (currentPage == "Settings") Navigate("Settings"); }
+        void RefreshUpdates() { if (setupVisible) { if(setupStep==2) RenderSetup(); } else if (currentPage == "Settings") Navigate("Settings"); }
         void HostsGuide()
         {
-            ShowReport("Как обновить hosts", "1. Открой настройки приложения.\n\n2. Нажми «Проверить актуальность». Приложение скачает список Flowseal и добавит адреса DNS-сервисов, если включён переключатель «Адреса Secure DNS в hosts». Затем сравнит записи доменов.\n\n3. Если нужно обновление, при желании открой предпросмотр. Нажми «Обновить hosts» и подтверди изменения.\n\n4. Приложение сохранит резервную копию, обновит только соответствующие домены и очистит DNS-кэш.\n\n5. Перезапусти браузер и подключи Zapret.\n\nЕсли что-то перестало работать, нажми «Восстановить hosts из копии». Автооткат доступен, пока hosts не менялся после обновления. Копии хранятся в папке данных приложения, в backups.\n\nСистемный файл: " + HostsUpdate.SystemPath + "\n\nИсточник: " + HostsUpdate.Url);
+            ShowReport("Hosts и IPSet","Hosts помогает Windows находить адреса нужных сайтов. IPSet — список адресов для обхода.\n\nВ мастере проверка начинается автоматически. В настройках нажми «Проверить снова».\n\nЕсли есть обновления, нажми «Обновить hosts и IPSet». Перед обновлением отключи Zapret. Изменения hosts потребуют подтверждения. Остальные записи сохранятся.\n\nКопия hosts сохраняется в папке данных приложения, в backups. После обновления перезапусти браузер.\n\nАдреса Secure DNS в hosts помогают находить DNS-серверы, но сами не включают шифрование. Защищённый DNS настраивается отдельно.");
         }
     }
 }

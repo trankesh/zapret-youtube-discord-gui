@@ -68,6 +68,7 @@ namespace ZapretDesktop
         }
         public void Register(string xml) { Use<int>(folder => { object task=folder.RegisterTask(AutoStart.TaskName,xml,6,AutoStart.UserSid,null,3,"O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;" + AutoStart.UserSid + ")"); Release(task); return 0; }); }
         public void Delete() { Use<int>(folder => { folder.DeleteTask(AutoStart.TaskName,0); return 0; }); }
+        public void Run() { Use<int>(folder => { object task=folder.GetTask(AutoStart.TaskName); try { dynamic registered=task; object running=registered.Run(null); Release(running); } finally { Release(task); } return 0; }); }
     }
     internal sealed class StartupRecord
     {
@@ -75,12 +76,14 @@ namespace ZapretDesktop
         public string Source { get; set; }
         public string Data { get; set; }
         public string Snapshot { get; set; }
+        [ScriptIgnore] public bool NeedsUpgrade { get; set; }
     }
     public static class AutoStart
     {
         const string RunKey=@"Software\Microsoft\Windows\CurrentVersion\Run";
         const string LegacyName="ZapretDesktop";
-        const string Marker="ZapretDesktop.ElevatedStartup.v1";
+        const string Marker="ZapretDesktop.ElevatedStartup.v2";
+        const string LegacyMarker="ZapretDesktop.ElevatedStartup.v1";
         const string Namespace="http://schemas.microsoft.com/windows/2004/02/mit/task";
         public static string ReadError;
         internal static bool IsMissingTask(Exception error)
@@ -97,6 +100,20 @@ namespace ZapretDesktop
         public static string Command(string exe) { return Engine.Quote(exe) + " --startup"; }
         internal static bool SamePath(string left,string right) { return String.Equals(Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar),Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar,Path.AltDirectorySeparatorChar),StringComparison.OrdinalIgnoreCase); }
         internal static bool IsProtectedExecutable(string exe) { return SamePath(Path.GetDirectoryName(exe),ProtectedDirectory); }
+        internal static bool SameUser(string value,string sid)
+        {
+            if (String.Equals(value,sid,StringComparison.OrdinalIgnoreCase)) return true;
+            if (String.IsNullOrWhiteSpace(value)) return false;
+            try { return String.Equals(((SecurityIdentifier)new NTAccount(value).Translate(typeof(SecurityIdentifier))).Value,sid,StringComparison.OrdinalIgnoreCase); }
+            catch (IdentityNotMappedException) { return false; }
+            catch (ArgumentException) { return false; }
+        }
+        internal static bool TryStartScheduled(IStartupTasks store,Action run)
+        {
+            try { string xml=store.Read(); var record=ParseTask(xml,UserSid,ProtectedDirectory); if (record==null || record.NeedsUpgrade || !TaskEnabled(xml)) return false; run(); return true; }
+            catch { return false; }
+        }
+        public static bool TryStartScheduled() { var store=new WindowsStartupTasks(); return TryStartScheduled(store,store.Run); }
         internal static string TaskXml(string source,string data,string snapshot,string sid)
         {
             var record=new StartupRecord { Marker=Marker,Source=Path.GetFullPath(source),Data=Path.GetFullPath(data),Snapshot=Path.GetFullPath(snapshot) };
@@ -120,7 +137,14 @@ namespace ZapretDesktop
             Func<string,string> value=path => { var node=document.SelectSingleNode("/t:Task/"+path,ns); return node==null ? "" : node.InnerText; };
             if (document.SelectNodes("/t:Task/t:Principals/t:Principal",ns).Count!=1 || value("t:Principals/t:Principal/@id")!="Owner" || value("t:Actions/@Context")!="Owner") throw new IOException("Неизвестный контекст задачи автозапуска.");
             var record=new JavaScriptSerializer().Deserialize<StartupRecord>(value("t:Data"));
-            if (record==null || record.Marker!=Marker || value("t:RegistrationInfo/t:Description")!=Marker || value("t:Principals/t:Principal/t:UserId")!=sid || value("t:Principals/t:Principal/t:RunLevel")!="HighestAvailable" || value("t:Principals/t:Principal/t:LogonType")!="InteractiveToken" || document.SelectNodes("/t:Task/t:Actions/*",ns).Count!=1 || document.SelectNodes("/t:Task/t:Triggers/*",ns).Count!=1 || value("t:Triggers/t:LogonTrigger/t:UserId")!=sid || value("t:Actions/t:Exec/t:Arguments")!="--startup --elevated" || (!SamePath(Path.GetDirectoryName(record.Snapshot),directory) && !IsInstalledAction(record.Source,record.Snapshot)) || !SamePath(record.Snapshot,value("t:Actions/t:Exec/t:Command")) || !SamePath(Path.GetDirectoryName(record.Snapshot),value("t:Actions/t:Exec/t:WorkingDirectory")) || !Path.IsPathRooted(record.Source) || !Path.IsPathRooted(record.Data)) throw new IOException("Задача автозапуска имеет неизвестные параметры. Она не будет перезаписана.");
+            string arguments=System.Text.RegularExpressions.Regex.Replace(value("t:Actions/t:Exec/t:Arguments").Trim(),@"\s+"," ");
+            if (record==null || record.Marker!=Marker && record.Marker!=LegacyMarker || value("t:RegistrationInfo/t:Description")!=record.Marker) throw new IOException("Имя задачи Zapret занято другой задачей. Она не будет изменена.");
+            if (!SameUser(value("t:Principals/t:Principal/t:UserId"),sid) || !SameUser(value("t:Triggers/t:LogonTrigger/t:UserId"),sid)) throw new IOException("Задача автозапуска настроена для другой учётной записи Windows.");
+            if (value("t:Principals/t:Principal/t:RunLevel")!="HighestAvailable" || value("t:Principals/t:Principal/t:LogonType")!="InteractiveToken") throw new IOException("В задаче Zapret отсутствует запуск с повышенными правами. Проверь задачу в Планировщике Windows.");
+            if (document.SelectNodes("/t:Task/t:Actions/*",ns).Count!=1 || document.SelectNodes("/t:Task/t:Triggers/*",ns).Count!=1 || arguments!="--startup --elevated" && arguments!="--startup") throw new IOException("В задаче Zapret обнаружены посторонние действия или аргументы. Она не будет изменена.");
+            if (String.IsNullOrWhiteSpace(record.Source) || String.IsNullOrWhiteSpace(record.Data) || String.IsNullOrWhiteSpace(record.Snapshot) || !Path.IsPathRooted(record.Source) || !Path.IsPathRooted(record.Data) || (!SamePath(Path.GetDirectoryName(record.Snapshot),directory) && !IsInstalledAction(record.Source,record.Snapshot)) || !SamePath(record.Snapshot,value("t:Actions/t:Exec/t:Command")) || !SamePath(Path.GetDirectoryName(record.Snapshot),value("t:Actions/t:Exec/t:WorkingDirectory"))) throw new IOException("Путь запуска задачи Zapret не совпадает с защищённой копией. Она не будет изменена.");
+            // Old GUI builds reject v2 instead of overwriting a repaired task.
+            record.NeedsUpgrade=arguments=="--startup" || record.Marker!=Marker;
             return record;
         }
         internal static StartupRecord ReadRecord() { return ParseTask(new WindowsStartupTasks().Read(),UserSid,ProtectedDirectory); }
@@ -136,6 +160,14 @@ namespace ZapretDesktop
             using (var key=Registry.CurrentUser.OpenSubKey(RunKey)) return key==null ? "" : Convert.ToString(key.GetValue(LegacyName));
         }
         internal static bool IsLegacy(string value,string exe) { return String.Equals(value,Command(exe),StringComparison.OrdinalIgnoreCase); }
+        internal static string OwnedLegacySource(string value)
+        {
+            var match=System.Text.RegularExpressions.Regex.Match(value ?? "","^\"([^\"]+)\" --startup(?: --elevated)?$",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!match.Success || !Path.IsPathRooted(match.Groups[1].Value)) return null;
+            string source=match.Groups[1].Value;
+            if (File.Exists(source)) { try { return System.Diagnostics.FileVersionInfo.GetVersionInfo(source).ProductName=="Zapret Desktop" ? source : null; } catch { return null; } }
+            return System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(source),@"^Zapret(?:-Desktop-\d+\.\d+\.\d+(?:-[A-Za-z0-9.]+)?-win-x64)?\.exe$",System.Text.RegularExpressions.RegexOptions.IgnoreCase) ? source : null;
+        }
         internal static string LegacySourceForData(string value,string data)
         {
             var match=System.Text.RegularExpressions.Regex.Match(value ?? "", "^\"([^\"]+)\" --startup$",System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -157,7 +189,7 @@ namespace ZapretDesktop
         {
             using (var key=Registry.CurrentUser.OpenSubKey(RunKey,true)) {
                 if (key==null) return; string value=Convert.ToString(key.GetValue(LegacyName));
-                if (IsLegacy(value,source) || previousSource!=null && IsLegacy(value,previousSource)) key.DeleteValue(LegacyName,false);
+                if (IsLegacy(value,source) || previousSource!=null && IsLegacy(value,previousSource) || OwnedLegacySource(value)!=null) key.DeleteValue(LegacyName,false);
             }
         }
         public static bool Enabled(string exe)
@@ -167,7 +199,7 @@ namespace ZapretDesktop
         internal static bool ReadState(IStartupTasks store,string exe,Func<string> legacy)
         {
             ReadError=null;
-            try { string xml=store.Read(); ParseTask(xml,UserSid,ProtectedDirectory); return TaskEnabled(xml) || IsLegacy(legacy(),exe); }
+            try { string xml=store.Read(); ParseTask(xml,UserSid,ProtectedDirectory); return TaskEnabled(xml) || IsLegacy(legacy(),exe) || OwnedLegacySource(legacy())!=null; }
             catch (Exception error) { ReadError=error.Message; return false; }
         }
         internal static void ReplaceTask(IStartupTasks store,string xml,Func<string,bool> verify,Action removeLegacy)
@@ -196,9 +228,9 @@ namespace ZapretDesktop
         {
             if (IsProtectedExecutable(exe)) return false;
             string xml=new WindowsStartupTasks().Read(); var record=ParseTask(xml,UserSid,ProtectedDirectory);
-            bool legacy=IsLegacy(Legacy(),exe) || importedLegacySource!=null && IsLegacy(Legacy(),importedLegacySource);
+            bool legacy=IsLegacy(Legacy(),exe) || OwnedLegacySource(Legacy())!=null || importedLegacySource!=null && IsLegacy(Legacy(),importedLegacySource);
             if (!legacy && !TaskEnabled(xml)) return false;
-            if (!legacy && record!=null && SamePath(record.Source,exe) && SamePath(record.Data,ApplicationPaths.DataDirectory) && SnapshotMatches(exe,record.Snapshot)) return false;
+            if (!legacy && record!=null && !record.NeedsUpgrade && SamePath(record.Source,exe) && SamePath(record.Data,ApplicationPaths.DataDirectory) && SnapshotMatches(exe,record.Snapshot)) return false;
             Set(exe,true,importedLegacySource); return true;
         }
         static string SnapshotName(byte[] bytes,byte[] config) { return "Zapret-" + HostsUpdate.Hash(bytes.Concat(config).ToArray()) + ".exe"; }

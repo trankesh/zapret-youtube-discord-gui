@@ -18,6 +18,7 @@ $sources = @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.cs' |
 $fontResource = Join-Path $out 'Zapret.g.resources'
 $licenseResources = @('LICENSE','THIRD-PARTY-NOTICES.md') + @(Get-ChildItem -LiteralPath (Join-Path $root 'licenses') -File | ForEach-Object { 'licenses/' + $_.Name })
 $licenseResources = @($licenseResources | ForEach-Object { '/resource:' + (Join-Path $root $_) + ',Legal.' + [IO.Path]::GetFileName($_) })
+$nativeDnsResource='/resource:'+(Join-Path $root 'src\InterfaceDns.cs')+',InterfaceDns.cs'
 $writer = [System.Resources.ResourceWriter]::new($fontResource)
 try {
     foreach ($font in Get-ChildItem -LiteralPath (Join-Path $root 'assets\fonts') -Filter '*.ttf') {
@@ -26,7 +27,7 @@ try {
     $writer.AddResource('icons/app.ico', [IO.File]::OpenRead((Join-Path $root 'assets\app.ico')), $true)
     $writer.Generate()
 } finally { $writer.Dispose() }
-& (Join-Path $framework 'csc.exe') /nologo /target:winexe /platform:x64 /optimize+ /utf8output ('/out:' + (Join-Path $out 'Zapret.exe')) ('/win32manifest:' + $manifest) ('/win32icon:' + (Join-Path $root 'assets\app.ico')) ('/resource:' + (Join-Path $root 'src\Shell.xaml') + ',Shell.xaml') ('/resource:' + (Join-Path $root 'Zapret.exe.config') + ',Default.config') ('/resource:' + (Join-Path $root 'src\DnsControl.ps1') + ',DnsControl.ps1') ('/resource:' + $fontResource + ',Zapret.g.resources') ('/resource:' + (Join-Path $root 'assets\fonts\OFL.txt') + ',Fonts.OFL.txt') ('/resource:' + (Join-Path $root 'assets\bundle\Flowseal-1.10.4.zip') + ',BundledZapret.zip') ('/resource:' + (Join-Path $root 'assets\bundle\LICENSE-Flowseal.txt') + ',Flowseal.LICENSE.txt') @licenseResources @refs @sources
+& (Join-Path $framework 'csc.exe') /nologo /target:winexe /platform:x64 /optimize+ /utf8output ('/out:' + (Join-Path $out 'Zapret.exe')) ('/win32manifest:' + $manifest) ('/win32icon:' + (Join-Path $root 'assets\app.ico')) ('/resource:' + (Join-Path $root 'src\Shell.xaml') + ',Shell.xaml') ('/resource:' + (Join-Path $root 'Zapret.exe.config') + ',Default.config') ('/resource:' + (Join-Path $root 'src\DnsControl.ps1') + ',DnsControl.ps1') ('/resource:' + $fontResource + ',Zapret.g.resources') ('/resource:' + (Join-Path $root 'assets\fonts\OFL.txt') + ',Fonts.OFL.txt') ('/resource:' + (Join-Path $root 'assets\bundle\Flowseal-1.10.4.zip') + ',BundledZapret.zip') ('/resource:' + (Join-Path $root 'assets\bundle\LICENSE-Flowseal.txt') + ',Flowseal.LICENSE.txt') $nativeDnsResource @licenseResources @refs @sources
 if ($LASTEXITCODE -ne 0) { throw 'Compilation failed' }
 Copy-Item -LiteralPath (Join-Path $root 'Zapret.exe.config') -Destination $out -Force
 Copy-Item -LiteralPath (Join-Path $root 'assets\fonts\OFL.txt') -Destination $out -Force

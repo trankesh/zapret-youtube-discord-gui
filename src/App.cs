@@ -36,6 +36,11 @@ namespace ZapretDesktop
                 if (args.Length > 0 && args[0].StartsWith("--installer-",StringComparison.Ordinal)) return InstallerRuntime.Run(args);
                 bool isPreview = args.Contains("--preview");
                 if (!isPreview && !Engine.IsAdmin) {
+                    if (args.Contains("--startup")) {
+                        if (!args.Contains("--elevated") && AutoStart.TryStartScheduled()) return 0;
+                        try { string folder=ApplicationPaths.DataDirectory; Directory.CreateDirectory(folder); File.WriteAllText(Path.Combine(folder,"startup-notice.txt"),"Не удалось запустить Zapret с Windows. Открой EXE вручную и заново включи «Запускать интерфейс с Windows» в настройках."); } catch { }
+                        return 1;
+                    }
                     if (args.Contains("--elevated")) { MessageBox.Show("Не удалось получить права администратора. Приложение будет закрыто.", "Zapret"); return 1; }
                     try { Process.Start(new ProcessStartInfo(Assembly.GetExecutingAssembly().Location, args.Contains("--startup") ? "--startup --elevated" : "--elevated") { UseShellExecute = true, Verb = "runas", WorkingDirectory = AppDomain.CurrentDomain.BaseDirectory }); }
                     catch (System.ComponentModel.Win32Exception e) { MessageBox.Show(e.NativeErrorCode == 1223 ? "Для работы Zapret нужны права администратора. Запрос отменён, приложение будет закрыто." : e.Message, "Zapret"); }
@@ -54,6 +59,8 @@ namespace ZapretDesktop
                 MouseScrolling.Initialize();
                 app.DispatcherUnhandledException += (s, e) => { MessageBox.Show(e.Exception.Message, "Zapret", MessageBoxButton.OK, MessageBoxImage.Error); e.Handled = true; };
                 var shell = new Shell(isPreview);
+                string startupNoticeFile=Path.Combine(ApplicationPaths.DataDirectory,"startup-notice.txt");
+                if (!isPreview && File.Exists(startupNoticeFile)) { shell.RecordStartupNotice(AutoStart.Enabled(ApplicationPaths.SourceExecutable) ? "Автозапуск настроен. Программа откроется при следующем входе в Windows." : File.ReadAllText(startupNoticeFile)); File.Delete(startupNoticeFile); }
                 if (!isPreview && ApplicationPaths.MigrationError!=null) shell.Window.Loaded += (s,e) => MessageBox.Show(shell.Window,ApplicationPaths.MigrationError,"Перенос профиля",MessageBoxButton.OK,MessageBoxImage.Warning);
                 if (startupNotice != null) shell.RecordStartupNotice(startupNotice);
                 instance.Listen(() => { if (!app.Dispatcher.HasShutdownStarted) app.Dispatcher.BeginInvoke(new Action(shell.ShowFromTray)); });
@@ -73,6 +80,7 @@ namespace ZapretDesktop
                     }
                     shell.PreviewAdvanced(true);
                     foreach (string page in new[] { "Strategies", "Tests", "Lists", "Settings", "Log" }) CapturePreview(shell, dir, page, "Advanced-" + page);
+                    CapturePreview(shell,dir,"Strategies","Advanced-Strategies-bottom",Double.PositiveInfinity);
                     CapturePreview(shell, dir, "Settings", "Advanced-Settings-filters", Double.NegativeInfinity);
                     CapturePreview(shell, dir, "Settings", "Advanced-Settings-bottom", Double.PositiveInfinity);
                     shell.PreviewAdvanced(false);
@@ -220,7 +228,8 @@ namespace ZapretDesktop
             File.WriteAllText(Path.Combine(data, "settings.json"), new JavaScriptSerializer().Serialize(settings));
         }
         public void ApplyStartup() { if (settings.StartMinimized && !setupVisible) { startInTray = true; Window.WindowState = WindowState.Minimized; } }
-        public void RecordStartupNotice(string message) { AddLog(message); }
+        string startupHint;
+        public void RecordStartupNotice(string message) { startupHint=message; AddLog(message); }
         public void PreviewAdvanced(bool value) { if (!preview) throw new InvalidOperationException(); settings.AdvancedMode = value; }
         public void PreviewFilters() { if (!preview) throw new InvalidOperationException(); var scroll = Find<ContentControl>("Page").Content as ScrollViewer; if (filtersCard != null && scroll != null) { scroll.ScrollToVerticalOffset(scroll.VerticalOffset + filtersCard.TranslatePoint(new Point(0, 0), scroll).Y); Window.UpdateLayout(); } }
         public string PreviewAccent(string value) { if (!preview) throw new InvalidOperationException(); string previous = settings.AccentColor; ApplyAccent(value); return previous; }
@@ -313,9 +322,18 @@ namespace ZapretDesktop
         TextBlock Label(string value) { var t = Text(value, 11, Muted); t.Margin = new Thickness(0, 0, 0, 12); return t; }
         StackPanel Stack(params UIElement[] children) { var p = new StackPanel(); foreach (var c in children) p.Children.Add(c); return p; }
         Border Card(UIElement content) { return new Border { Style = (Style)Window.FindResource("Card"), Child = content }; }
+        Grid HelpHeader(string title,Action help)
+        {
+            var grid=new Grid { Margin=new Thickness(0,0,0,12) };
+            grid.ColumnDefinitions.Add(new ColumnDefinition()); grid.ColumnDefinitions.Add(new ColumnDefinition {Width=GridLength.Auto});
+            var caption=Text(title,14,Muted); caption.VerticalAlignment=VerticalAlignment.Center; grid.Children.Add(caption);
+            var button=Button("?",help,false,false); button.Width=30; button.Height=30; button.MinHeight=30; button.Padding=new Thickness(0); button.Margin=new Thickness(8,0,0,0); button.Background=Brushes.Transparent; button.ToolTip="Справка: "+title;
+            button.Content=new Border { Width=23,Height=23,CornerRadius=new CornerRadius(12),BorderBrush=Muted,BorderThickness=new Thickness(1),Child=new TextBlock {Text="?",FontSize=16,TextAlignment=TextAlignment.Center,VerticalAlignment=VerticalAlignment.Center} };
+            System.Windows.Automation.AutomationProperties.SetName(button,"Справка: "+title); Grid.SetColumn(button,1); grid.Children.Add(button); return grid;
+        }
         Button Button(string label, Action click, bool primary = false, bool action = true)
         {
-            var b = new Button { Content = label, HorizontalAlignment = HorizontalAlignment.Left, Margin = new Thickness(0, 0, 10, 8) };
+            var b = new Button { Content = new TextBlock { Text=label,TextAlignment=TextAlignment.Center,TextWrapping=TextWrapping.Wrap }, HorizontalAlignment = HorizontalAlignment.Stretch, MinHeight=42, Margin = new Thickness(0, 0, 0, 8) };
             if (primary) b.Style = (Style)Window.FindResource("Primary");
             b.Click += (s, e) => { if (SweepLocked) return; try { click(); } catch (Exception ex) { AddLog("ОШИБКА: " + ex.Message); MessageBox.Show(Window, ex.Message, "Zapret"); } };
             if (action) actions.Add(b);
@@ -330,7 +348,9 @@ namespace ZapretDesktop
             for (int index = 0; index < buttons.Length; index++) {
                 var button = buttons[index]; int column = index % columns;
                 button.HorizontalAlignment = HorizontalAlignment.Stretch; button.FontSize = 14; button.Padding = new Thickness(6, 11, 6, 11);
-                button.Margin = new Thickness(column == 0 ? 0 : 4, 0, column == columns - 1 ? 0 : 4, index / columns == (buttons.Length - 1) / columns ? 0 : 8);
+                bool lastWide=index==buttons.Length-1 && column==0 && buttons.Length%columns==1;
+                button.Margin = new Thickness(column == 0 ? 0 : 4, 0, column == columns - 1 || lastWide ? 0 : 4, index / columns == (buttons.Length - 1) / columns ? 0 : 8);
+                if (lastWide) Grid.SetColumnSpan(button,columns);
                 Grid.SetColumn(button, column); Grid.SetRow(button, index / columns); grid.Children.Add(button);
             }
             return grid;
@@ -573,9 +593,9 @@ namespace ZapretDesktop
                 Choose(st); detail.Children.Add(Label("СТРАТЕГИЯ")); detail.Children.Add(Text(st.Name, 25, null)); Gap(detail);
                 detail.Children.Add(Label("МЕТОДЫ DPI DESYNC")); detail.Children.Add(Text(st.Methods, 15, Accent)); Gap(detail);
                 detail.Children.Add(Text(st.Profiles + " профилей фильтрации · TCP / UDP", 13, Muted)); Gap(detail);
-                detail.Children.Add(Button("Выбрать для запуска", () => { Choose(st); Navigate("Home"); }, true)); Gap(detail);
-                detail.Children.Add(Button("Проверить эту стратегию", () => { var ignored = Guard(t => Sweep(new[] { st }.ToList(), t), true); })); Gap(detail);
-                detail.Children.Add(Button("Посмотреть аргументы", () => ShowArguments(st), false, false)); Gap(detail);
+                detail.Children.Add(Wide("Выбрать для запуска", () => { Choose(st); Navigate("Home"); }, true));
+                detail.Children.Add(Wide("Проверить эту стратегию", () => { var ignored = Guard(t => Sweep(new[] { st }.ToList(), t), true); }));
+                detail.Children.Add(Wide("Посмотреть аргументы", () => ShowArguments(st))); Gap(detail,10);
                 detail.Children.Add(Text("Параметры читаются из исходного .bat. Файлы стратегии остаются в сборке Flowseal.", 12, Muted));
             };
             list.SelectionChanged += (s, e) => show(); show(); return Scroll(grid);
@@ -797,7 +817,7 @@ namespace ZapretDesktop
                 previousIndex = combo.SelectedIndex;
                 load();
             }; load();
-            var bottom = Stack(); Gap(bottom, 14); bottom.Children.Add(Row(Button("Сохранить", saveEditor, true), Button("Открыть папку", () => { NeedBundle(); Process.Start("explorer.exe", Engine.Quote(Path.Combine(Root, "lists"))); }, false, false)));
+            var bottom = Stack(); Gap(bottom, 14); bottom.Children.Add(ButtonGrid(2,Button("Сохранить", saveEditor, true), Button("Открыть папку", () => { NeedBundle(); Process.Start("explorer.exe", Engine.Quote(Path.Combine(Root, "lists"))); }, false, false)));
             Gap(bottom, 12); bottom.Children.Add(Text("Одна запись на строку. Перед сохранением создаётся .ui-backup. Изменения действуют после перезапуска Zapret.", 12, Muted)); Grid.SetRow(bottom, 2); grid.Children.Add(bottom); return grid;
         }
         UIElement SettingsPage()
@@ -807,9 +827,7 @@ namespace ZapretDesktop
             content.Children.Add(Wide("Диагностика подключения", () => { var ignored = Guard(Diagnostics, false); }));
             var closeInTray = new CheckBox { IsChecked = settings.CloseToTray };
             closeInTray.Click += (s, e) => { settings.CloseToTray = closeInTray.IsChecked == true; Save(); };
-            var applicationCard = Card(Stack(Label("ПРИЛОЖЕНИЕ"), ToggleRow("Закрывать в трей", "Крестик скрывает окно. Двойной щелчок по значку открывает его.", closeInTray), ButtonGrid(2, Button("Мастер настройки", () => { EnsureStopped(); StartSetup(); }), Button("Выйти", () => { var ignored = ExitApplication(); }, false, false))));
-            ((StackPanel)applicationCard.Child).Children.Add(new Border { Height=12 });
-            ((StackPanel)applicationCard.Child).Children.Add(Button("Папка данных ↗",()=>{ Directory.CreateDirectory(data); Process.Start("explorer.exe",Engine.Quote(data)); },false,false));
+            var dataFolder=Card(Stack(Label("ДАННЫЕ ПРИЛОЖЕНИЯ"),Text("Настройки, журнал и резервные копии хранятся отдельно от EXE.",14,Muted),new Border {Height=12},Wide("Открыть папку данных ↗",()=>{ Directory.CreateDirectory(data); Process.Start("explorer.exe",Engine.Quote(data)); })));
             content.Children.Add(AccentSettings()); Gap(content, 14);
             var advanced = new CheckBox { IsChecked = settings.AdvancedMode, IsEnabled = !busy };
             advanced.Click += (s, e) => {
@@ -819,8 +837,9 @@ namespace ZapretDesktop
             var modeCard = Card(ToggleRow("Продвинутый режим", "Дополнительные настройки и журнал работы. Если всё работает, менять их не нужно.", advanced));
             modeCard.Padding = new Thickness(16, 18, 16, 0);
             var path = new TextBox { Text = Root ?? "", IsReadOnly = true, Margin = new Thickness(0, 0, 0, 14) };
-            var source = Stack(Label("НАБОР FLOWSEAL"), path, ButtonGrid(1, Button("Выбрать папку…", SelectFolder)));
-            if (settings.AdvancedMode) { Gap(source, 8); source.Children.Add(ButtonGrid(2, Button("Обновления", () => { var ignored = Guard(CheckUpdates, false); }), Button("Релизы ↗", () => Process.Start("https://github.com/Flowseal/zapret-discord-youtube/releases/latest"), false, false))); }
+            var source = Stack(HelpHeader("НАБОР FLOWSEAL",BundleGuide), path, Wide("Выбрать папку…", SelectFolder));
+            source.Children.Add(ButtonGrid(2,Button("Релизы Flowseal ↗",OpenFlowsealReleases,false,false),Button("Мастер настройки",()=>{ EnsureStopped(); StartSetup(); })));
+            if (settings.AdvancedMode) { Gap(source, 8); source.Children.Add(Wide("Проверить версию набора", () => { var ignored = Guard(CheckUpdates, false); })); }
             content.Children.Add(Card(source)); Gap(content, 16);
             string exe = ApplicationPaths.SourceExecutable;
             var startup = new CheckBox { IsChecked = AutoStart.Enabled(exe) };
@@ -854,12 +873,13 @@ namespace ZapretDesktop
                 autoBypass.IsChecked = AutoStart.BypassEnabled(Root);
             };
             var startupCard = Stack(Label("АВТОЗАПУСК"), ToggleRow("Запускать интерфейс с Windows", "Открывать программу при входе в Windows без повторного запроса прав. Для учётной записи администратора.", startup), ToggleRow("Запускать свёрнутым", "При автозапуске сразу скрывать окно в трей.", minimized), ToggleRow("Запускать обход с Windows", "Работает через службу даже без открытого интерфейса. Выключение отменяет будущий автозапуск; текущий обход можно остановить на главном экране.", autoBypass));
+            startupCard.Children.Add(ToggleRow("Закрывать в трей","Крестик скрывает окно. Полный выход доступен через значок в трее.",closeInTray));
+            if (!String.IsNullOrWhiteSpace(startupHint)) startupCard.Children.Add(Text(startupHint,14,Muted));
             if (startupReadError!=null) { var warning=Stack(Text("Не удалось прочитать автозапуск: " + startupReadError,14,Color("#D6AD73")),new Border { Height=10 },Button("Проверить снова",()=>Navigate("Settings"),false,false)); warning.Margin=new Thickness(0,0,0,14); startupCard.Children.Insert(2,warning); }
             content.Children.Add(Card(startupCard)); Gap(content, 16);
-            content.Children.Add(applicationCard); Gap(content, 14);
             content.Children.Add(UpdateCard()); Gap(content, 14);
             content.Children.Add(DnsCard()); Gap(content, 14);
-            if (!settings.AdvancedMode) { content.Children.Add(modeCard); return Scroll(content); }
+            if (!settings.AdvancedMode) { content.Children.Add(modeCard); Gap(content,14); content.Children.Add(dataFolder); return Scroll(content); }
             var svc = Stack(Label("ФОНОВАЯ СЛУЖБА"));
             serviceState = Text("", 17, null); svc.Children.Add(serviceState); Gap(svc, 10);
             svc.Children.Add(Text("Служба запускается вместе с Windows и работает при закрытом интерфейсе. Использует выбранную стратегию. Для смены стратегии переустанови службу.", 12, Muted)); Gap(svc, 16);
@@ -897,6 +917,7 @@ namespace ZapretDesktop
             content.Children.Add(modeCard); Gap(content, 14);
             content.Children.Add(Card(Stack(Label("ДОПОЛНИТЕЛЬНО"), Button("Стратегии и аргументы  ›", () => Navigate("Strategies"), false, false), Button("Списки и исключения  ›", () => Navigate("Lists"), false, false), Button("Журнал  ›", () => Navigate("Log"), false, false)))); Gap(content, 14);
             content.Children.Add(Card(Stack(Label("ИНСТРУМЕНТЫ FLOWSEAL"), Button("Оригинальный менеджер ↗", NativeManager), new Border { Height = 14 }, Text("Очистка кэша Discord и расширенные исправления доступны в оригинальном менеджере service.bat.", 12, Muted))));
+            Gap(content,14); content.Children.Add(dataFolder);
             return Scroll(content);
         }
         void ApplyAccent(string value)
@@ -926,9 +947,12 @@ namespace ZapretDesktop
                 swatch.ToolTip = names[i]; swatch.Background = Brushes.Transparent; swatch.Padding = new Thickness(6); swatch.Margin = new Thickness(0, 0, 7, 0); swatches.Children.Add(swatch);
             }
             content.Children.Add(swatches);
-            var input = new TextBox { Text = settings.AccentColor, Tag = "#RRGGBB", MaxLength = 7, Width = 122, ToolTip = "HEX: #RRGGBB", Margin = new Thickness(0, 0, 8, 8) };
-            content.Children.Add(Row(input, Button("Применить", () => ApplyAccent(input.Text), true, false)));
-            content.Children.Add(Row(Button("Свой цвет…", PickAccent, false, false), Button("Сбросить", () => ApplyAccent(AccentTheme.Default), false, false)));
+            var input = new TextBox { Text = settings.AccentColor, Tag = "#RRGGBB", MaxLength = 7, ToolTip = "HEX: #RRGGBB", Margin = new Thickness(0, 0, 4, 0),VerticalContentAlignment=VerticalAlignment.Center };
+            var apply=Button("Применить",()=>ApplyAccent(input.Text),false,false); apply.Margin=new Thickness(4,0,0,0);
+            input.TextChanged+=(s,e)=>{ if(AccentTheme.Normalize(input.Text)!=settings.AccentColor) apply.Style=(Style)Window.FindResource("Primary"); else apply.ClearValue(FrameworkElement.StyleProperty); };
+            var colorRow=new Grid {Margin=new Thickness(0,0,0,8)}; colorRow.ColumnDefinitions.Add(new ColumnDefinition()); colorRow.ColumnDefinitions.Add(new ColumnDefinition());
+            colorRow.Children.Add(input); Grid.SetColumn(apply,1); colorRow.Children.Add(apply); content.Children.Add(colorRow);
+            content.Children.Add(ButtonGrid(2,Button("Свой цвет…",PickAccent,false,false),Button("Сбросить",()=>ApplyAccent(AccentTheme.Default),false,false)));
             var card = Card(content); card.Padding = new Thickness(16); return card;
         }
         sealed class ColorDialogOwner : System.Windows.Forms.IWin32Window

@@ -20,6 +20,8 @@ namespace ZapretDesktop
         public string Guid { get; set; }
         public string Name { get; set; }
         public string[] Servers { get; set; }
+        public bool? DohEnabled { get; set; }
+        public bool DohSupported { get; set; }
         public override string ToString() { return Name; }
     }
     public sealed class DnsState
@@ -68,12 +70,16 @@ namespace ZapretDesktop
             string script;
             using (var stream = typeof(SecureDns).Assembly.GetManifestResourceStream("DnsControl.ps1")) using (var reader = new StreamReader(stream, Encoding.UTF8)) script = reader.ReadToEnd();
             var serializer = new JavaScriptSerializer();
-            return "$action=" + Literal(action) + ";$adapterId=" + Literal(adapter ?? "") + ";$backup=" + Literal(backup ?? "") + ";$provider=" + (provider == null ? "$null" : "(" + Literal(serializer.Serialize(new { provider.Id, provider.Template, provider.V4, provider.V6 })) + " | ConvertFrom-Json)") + ";\n" + script;
+            string nativeSource;
+            using(var stream=typeof(SecureDns).Assembly.GetManifestResourceStream("InterfaceDns.cs")) using(var reader=new StreamReader(stream,Encoding.UTF8)) nativeSource=reader.ReadToEnd();
+            string native="$null=Add-Type -TypeDefinition "+Literal(nativeSource)+" -ReferencedAssemblies 'System.dll','System.Core.dll','System.Web.Extensions.dll' -ErrorAction Stop;\nfunction Get-ZapretInterfaceDns($id,$af) { [ZapretDesktop.InterfaceDns]::Read([guid]$id,($af -eq 'IPv6')) };\nfunction Test-ZapretInterfaceDns($af,$state) { [ZapretDesktop.InterfaceDns]::Validate(($af -eq 'IPv6'),($state | ConvertTo-Json -Depth 8 -Compress)) };\nfunction Set-ZapretInterfaceDns($id,$af,$state) { [ZapretDesktop.InterfaceDns]::Write([guid]$id,($af -eq 'IPv6'),($state | ConvertTo-Json -Depth 8 -Compress)) };\n";
+            return native+"$action=" + Literal(action) + ";$adapterId=" + Literal(adapter ?? "") + ";$backup=" + Literal(backup ?? "") + ";$provider=" + (provider == null ? "$null" : "(" + Literal(serializer.Serialize(new { provider.Id, provider.Template, provider.V4, provider.V6 })) + " | ConvertFrom-Json)") + ";\n" + script;
         }
         public static Task<string> Execute(string action, string adapter, DnsProvider provider, string backup, CancellationToken token)
         {
-            string code = Convert.ToBase64String(Encoding.Unicode.GetBytes(Script(action,adapter,provider,backup)));
-            return Engine.RunTool(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"), new[]{"-NoProfile","-NonInteractive","-EncodedCommand",code}, token);
+            string bootstrap="$global:ProgressPreference='SilentlyContinue';[Console]::InputEncoding=New-Object Text.UTF8Encoding($false); & ([scriptblock]::Create([Console]::In.ReadToEnd()))";
+            string code=Convert.ToBase64String(Encoding.Unicode.GetBytes(bootstrap));
+            return Engine.RunTool(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe"), new[]{"-NoProfile","-NonInteractive","-EncodedCommand",code}, token,Script(action,adapter,provider,backup));
         }
         public static async Task<DnsState> Read(CancellationToken token) { return new JavaScriptSerializer().Deserialize<DnsState>(await Execute("Read",null,null,null,token)); }
     }

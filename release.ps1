@@ -12,6 +12,8 @@ $powershell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.ex
 if ($LASTEXITCODE -ne 0) { throw 'Feature tests failed' }
 & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\DnsControl.Tests.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'DNS tests failed' }
+& $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\DnsInterop.Tests.ps1') -ExePath $exe
+if ($LASTEXITCODE -ne 0) { throw 'DNS interop tests failed' }
 & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\StartupSchema.Tests.ps1') -ExePath $exe
 if ($LASTEXITCODE -ne 0) { throw 'Task Scheduler schema validation failed' }
 & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\StartupRead.Tests.ps1') -ExePath $exe

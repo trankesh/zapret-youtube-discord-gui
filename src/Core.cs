@@ -311,9 +311,10 @@ namespace ZapretDesktop
         {
             return "\"" + Regex.Replace(value, "(\\\\*)\"", "$1$1\\\"").TrimEnd('\\') + new string('\\', value.Reverse().TakeWhile(c => c == '\\').Count() * 2) + "\"";
         }
-        public static async Task<string> RunTool(string exe, IEnumerable<string> args, CancellationToken token)
+        public static Task<string> RunTool(string exe, IEnumerable<string> args, CancellationToken token) { return RunTool(exe,args,token,null); }
+        public static async Task<string> RunTool(string exe, IEnumerable<string> args, CancellationToken token,string input)
         {
-            using (var p = new Process { StartInfo = new ProcessStartInfo(exe, String.Join(" ", args.Select(Quote))) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true } })
+            using (var p = new Process { StartInfo = new ProcessStartInfo(exe, String.Join(" ", args.Select(Quote))) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,RedirectStandardInput=input!=null } })
             using (var stdout = new MemoryStream())
             using (var stderr = new MemoryStream())
             {
@@ -321,12 +322,13 @@ namespace ZapretDesktop
                 var output = p.StandardOutput.BaseStream.CopyToAsync(stdout); var error = p.StandardError.BaseStream.CopyToAsync(stderr);
                 using (token.Register(() => { try { if (!p.HasExited) p.Kill(); } catch { } }))
                 {
+                    if(input!=null) { byte[] bytes=Encoding.UTF8.GetBytes(input); try { await p.StandardInput.BaseStream.WriteAsync(bytes,0,bytes.Length,token); } finally { p.StandardInput.Close(); } }
                     await Task.Run(() => p.WaitForExit());
                     await Task.WhenAll(output, error);
                     string result = NativeOutput.Decode(stdout.ToArray()) + NativeOutput.Decode(stderr.ToArray());
                     token.ThrowIfCancellationRequested();
                     if (p.ExitCode != 0) throw new IOException(exe + " (" + p.ExitCode + "): " + result.Trim());
-                    return result.Trim();
+                    return input==null ? result.Trim() : NativeOutput.Decode(stdout.ToArray()).Trim();
                 }
             }
         }

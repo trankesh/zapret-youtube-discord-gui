@@ -15,6 +15,8 @@ namespace ZapretDesktop
         public static string Run(string directory)
         {
             StartupTests.Run();
+            GuiUpdates.Test();
+            InterfaceDns.Test();
             InstallerTests.Run(directory);
             var interlock=new SweepInterlock();
             Check(!interlock.Active && !interlock.Cancel(),"idle UI is unlocked"); interlock.Begin();
@@ -41,7 +43,7 @@ namespace ZapretDesktop
             foreach (var provider in SecureDns.Providers) {
                 Check(provider.V4.Concat(provider.V6).All(ip=>System.Net.IPAddress.Parse(ip)!=null) && new Uri(provider.Template).Scheme=="https","DNS catalog contains valid IPs and HTTPS templates");
                 string script=SecureDns.Script("Apply","11111111-1111-1111-1111-111111111111",provider,"C:\\backup user's\\dns.xml");
-                Check(script.Contains("backup user''s") && Convert.ToBase64String(Encoding.Unicode.GetBytes(script)).Length<31000,"DNS command quotes paths and fits Windows command limit");
+                Check(script.Contains("backup user''s") && script.Contains("Add-Type -TypeDefinition") && !script.Contains("Assembly]::LoadFrom"),"DNS quotes paths and embeds native helper without loading writable executables");
             }
             string path = Path.Combine(directory, "hosts"); string backups = Path.Combine(directory, "backups");
             string original = "# Личные записи\r\n127.0.0.1 localhost\r\n10.0.0.1 github.com private.lan # keep comment\r\n192.168.1.20 printer.lan\r\n";

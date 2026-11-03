@@ -4,6 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -38,7 +41,38 @@ namespace ZapretDesktop
         {
             RefreshVersion();
             installedVersionText = Text("Набор Flowseal · " + installedVersion, 16, Muted);
-            return Card(Stack(Label("ВЕРСИИ"), Text("Zapret Desktop GUI · " + GuiVersion, 16, null), new Border { Height = 10 }, installedVersionText));
+            var content=Stack(Label("ВЕРСИИ"),Text("Zapret Desktop GUI · "+GuiVersion,16,null),new Border {Height=10},installedVersionText,new Border {Height=16});
+            guiCheckButton=Wide("Проверить обновления GUI",()=>{ var ignored=CheckGuiUpdate(); }); guiCheckButton.Margin=new Thickness(0); content.Children.Add(guiCheckButton);
+            guiUpdateNote=Text(guiUpdateMessage ?? "",14,Muted); guiUpdateNote.Margin=new Thickness(0,12,0,0); content.Children.Add(guiUpdateNote);
+            guiReleaseButton=Wide("Открыть релиз на GitHub ↗",()=>{ if(guiRelease!=null) Process.Start(guiRelease.ReleaseUrl); },true); guiReleaseButton.Margin=new Thickness(0,12,0,0); content.Children.Add(guiReleaseButton);
+            RefreshGuiUpdateControls(); return Card(content);
+        }
+        bool guiUpdateChecking;
+        string guiUpdateMessage;
+        GuiRelease guiRelease;
+        TextBlock guiUpdateNote;
+        Button guiCheckButton,guiReleaseButton;
+        void RefreshGuiUpdateControls()
+        {
+            if(guiCheckButton==null) return;
+            guiCheckButton.IsEnabled=!guiUpdateChecking && !busy; guiCheckButton.Content=guiUpdateChecking ? "Проверяем…" : "Проверить обновления GUI";
+            guiUpdateNote.Text=guiUpdateMessage ?? ""; guiUpdateNote.Visibility=String.IsNullOrEmpty(guiUpdateMessage) ? Visibility.Collapsed : Visibility.Visible;
+            guiReleaseButton.Visibility=guiRelease==null || guiUpdateChecking ? Visibility.Collapsed : Visibility.Visible;
+        }
+        async Task CheckGuiUpdate()
+        {
+            if(guiUpdateChecking || SweepLocked || busy) return;
+            guiUpdateChecking=true; guiRelease=null; guiUpdateMessage="Проверяем последний стабильный релиз на GitHub…"; RefreshGuiUpdateControls();
+            try {
+                var release=await GuiUpdates.Check(CancellationToken.None); int comparison=release.CompareTo(GuiVersion);
+                if(comparison>0) { guiRelease=release; guiUpdateMessage="Доступна новая версия · "+release.VersionText; }
+                else guiUpdateMessage=comparison==0 ? "Установлена актуальная версия · "+GuiVersion : "Установленная версия новее опубликованной на GitHub ("+release.VersionText+").";
+            }
+            catch(OperationCanceledException) { guiUpdateMessage="Не дождались ответа GitHub. Попробуй ещё раз."; }
+            catch(HttpRequestException) { guiUpdateMessage="Не удалось связаться с GitHub. Проверь интернет и повтори проверку."; }
+            catch(IOException error) { guiUpdateMessage=error.Message; }
+            catch(Exception) { guiUpdateMessage="Не удалось проверить обновления. Попробуй позже."; }
+            finally { guiUpdateChecking=false; RefreshGuiUpdateControls(); }
         }
         Window Surface(string title, UIElement content, UIElement footer)
         {
@@ -121,7 +155,8 @@ namespace ZapretDesktop
                     var row = ToggleRow(name, strategy.Methods, toggle); list.Children.Add(row);
                 }
             };
-            content.Children.Add(Row(Button("Выбрать все", () => { foreach (var strategy in strategies) draft.Add(strategy.Name); render(); }, false, false), Button("Снять все", () => { draft.Clear(); render(); }, false, false)));
+            content.Children.Add(ButtonGrid(2,Button("Выбрать все", () => { foreach (var strategy in strategies) draft.Add(strategy.Name); render(); }, false, false), Button("Снять все", () => { draft.Clear(); render(); }, false, false)));
+            Gap(content,12);
             content.Children.Add(search); content.Children.Add(count); Gap(content, 14); content.Children.Add(list); search.TextChanged += (s, e) => render(); render();
             Window dialog = null;
             apply = Wide("Сохранить выбор", () => { testSelection.Clear(); foreach (string name in draft) testSelection.Add(name); settings.TestStrategies = testSelection.ToArray(); settings.TestSelectedOnly = true; Save(); dialog.Close(); changed(); }, true);
@@ -144,7 +179,7 @@ namespace ZapretDesktop
                 var previous = settings.HostsReceipt; settings.HostsReceipt = new HostsReceipt();
                 content = UpdateCard(); settings.HostsReceipt = previous;
             }
-            else if (name == "Guide") content = ReportCards("1. Проверь актуальность hosts и IPSet.\n\n2. Открой предпросмотр изменений и нажми «Обновить hosts».\n\n3. Подтверди запись. Резервная копия сохранится автоматически.\n\n4. Перезапусти браузер. Откат доступен в настройках.");
+            else if (name == "Guide") content = ReportCards("1. В мастере актуальность hosts и IPSet проверяется автоматически.\n\n2. Нажми «Обновить hosts и IPSet», если есть новые списки.\n\n3. Подтверди изменения hosts. Другие записи сохранятся.\n\n4. Перезапусти браузер и подключи Zapret.");
             else content = DiagnosticsCards(new List<Tuple<string, string, bool?>> { Tuple.Create("Набор Zapret", "Flowseal " + (Ready ? Bundle.Version(Root) : "не выбран"), (bool?)true), Tuple.Create("Права администратора", "Пример состояния диагностики", (bool?)null), Tuple.Create("Служба Windows", "Пример: остановлена", (bool?)null), Tuple.Create("Файлы набора", "Пример: все файлы на месте", (bool?)true) });
             var dialog = name == "Dns" ? DnsSurface() : name == "TestSelection" ? TestSelectionSurface(delegate { }) : Surface(name == "Updates" ? "Hosts и IPSet — пример" : name == "Guide" ? "Как обновить hosts" : "Диагностика — пример", content, null);
             dialog.ShowInTaskbar = false; dialog.Left = -20000; dialog.Top = 0; dialog.WindowStartupLocation = WindowStartupLocation.Manual; dialog.Show(); dialog.UpdateLayout();
