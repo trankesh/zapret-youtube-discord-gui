@@ -73,6 +73,15 @@ namespace ZapretDesktop
             var settings = new JavaScriptSerializer().Deserialize<Settings>("{}"); Check(settings.CloseToTray && settings.SetupVersion == 0, "tray defaults and setup migration");
             string bundle = EmbeddedBundle.Extract(Path.Combine(directory, "bundled")); Check(Bundle.Valid(bundle) && Bundle.Version(bundle) == EmbeddedBundle.Version, "embedded official bundle extraction"); Bundle.ValidateForSetup(bundle);
             var allStrategies = Bundle.Strategies(bundle);
+            var general = allStrategies.First(s => s.Name == "general");
+            var game = GameFilter.Read(bundle);
+            string originalArgs = Bundle.Arguments(general,bundle,game);
+            const string slot = "ACTIVE_DISCORD_UDP.bin";
+            StrategyFakes.Set(general,bundle,slot,"stun2.bin");
+            string updatedArgs = Bundle.Arguments(general,bundle,game);
+            Check(updatedArgs == originalArgs.Replace(slot,"stun2.bin"),"selected fake applies to all matching parameters");
+            StrategyFakes.Set(general,bundle,slot,null);
+            Check(Bundle.Arguments(general,bundle,game)==originalArgs,"restoring the default fake restores the original command");
             Check(Bundle.RuntimeProblem(bundle)==null,"complete Flowseal bundle available");
             string ipMode=Bundle.IpMode(bundle); Bundle.SetIpMode(bundle,"none"); Bundle.ValidateForSetup(bundle); Bundle.SetIpMode(bundle,ipMode);
             string missingFixture=Path.Combine(bundle,"bin","winws.exe"); var engineFixture=File.ReadAllBytes(missingFixture); File.Delete(missingFixture);

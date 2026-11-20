@@ -51,7 +51,7 @@ C# / WPF / .NET Framework. Без Electron, Node.js и фонового веб-�
 
 ## Скачать
 
-Текущая стабильная версия — **[1.0.1](https://github.com/trankesh/zapret-youtube-discord-gui/releases/tag/v1.0.1)**. Скачайте EXE для быстрого запуска или ZIP с документацией и лицензиями.
+Текущая стабильная версия — **[1.0.2](https://github.com/trankesh/zapret-youtube-discord-gui/releases/tag/v1.0.2)**. Скачайте EXE для быстрого запуска или ZIP с документацией и лицензиями.
 
 | Файл | Для чего |
 | --- | --- |

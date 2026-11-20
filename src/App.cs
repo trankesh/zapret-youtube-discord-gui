@@ -172,6 +172,7 @@ namespace ZapretDesktop
         Border filtersCard;
         StackPanel testResults;
         string pendingTest;
+        TextBlock pendingCount;
         readonly List<StandardRow> pendingRows = new List<StandardRow>();
         readonly DispatcherTimer timer = new DispatcherTimer();
         static Brush Color(string hex) { return (Brush)new BrushConverter().ConvertFromString(hex); }
@@ -646,18 +647,21 @@ namespace ZapretDesktop
         void TestRow(StandardRow row)
         {
             if (!Window.Dispatcher.CheckAccess()) { Window.Dispatcher.BeginInvoke(new Action(() => TestRow(row))); return; }
-            pendingRows.Add(row); PaintTranscript();
+            pendingRows.Add(row);
+            if (pendingCount!=null) pendingCount.Text="Проверено адресов: "+pendingRows.Count;
         }
         void PaintTranscript()
         {
             if (testResults == null) return;
+            pendingCount=null;
             testResults.Children.Clear();
             if (results.Count == 0 && pendingTest == null) {
                 var empty = Stack(Text("Здесь будут результаты", 17, null), new Border { Height = 8 }, Text("Начни с проверки сети или запусти подбор стратегии.", 14, Muted));
                 empty.Margin = new Thickness(4, 20, 4, 0); testResults.Children.Add(empty); return;
             }
             if (pendingTest != null) {
-                var live = Stack(Text("Проверяем " + pendingTest, 16, null), new Border { Height = 6 }, Text("Проверено адресов: " + pendingRows.Count, 14, Muted)); live.Margin = new Thickness(0, 6, 0, 18); testResults.Children.Add(live);
+                pendingCount=Text("Проверено адресов: "+pendingRows.Count,14,Muted);
+                var live = Stack(Text("Проверяем " + pendingTest, 16, null), new Border { Height = 6 }, pendingCount); live.Margin = new Thickness(0, 6, 0, 18); testResults.Children.Add(live);
             }
             if (!busy && results.Count > 1) {
                 var best = StandardReport.Best(results.Where(r => r.Strategy != "Без Zapret"));
@@ -909,11 +913,7 @@ namespace ZapretDesktop
             }, true), Button("Обновить IPSet", () => { var ignored = Guard(UpdateIpSet, false); })));
             filtersCard = Card(filters); content.Children.Add(filtersCard); Gap(content, 16);
             content.Children.Add(serviceCard); Gap(content, 16);
-            var fakes = Stack(Label("ПАКЕТЫ ДЛЯ ОБХОДА (FAKE)"));
-            var fakeNames = Ready ? Directory.GetFiles(Path.Combine(Root, "bin"), "*.bin").Where(p => !Path.GetFileName(p).StartsWith("ACTIVE_")).Select(Path.GetFileName).OrderBy(p => p).ToList() : new List<string>();
-            var fake = new ComboBox { ItemsSource = fakeNames, SelectedIndex = fakeNames.Count > 0 ? 0 : -1, Margin = new Thickness(0, 0, 0, 12) }; fakes.Children.Add(fake);
-            fakes.Children.Add(ButtonGrid(2, Button("Discord UDP", () => ReplaceFake(fake.SelectedItem as string, "ACTIVE_DISCORD_UDP.bin")), Button("Game UDP", () => ReplaceFake(fake.SelectedItem as string, "ACTIVE_GAME_UDP.bin"))));
-            content.Children.Add(Card(fakes)); Gap(content, 16);
+            content.Children.Add(FakesCard()); Gap(content, 16);
             content.Children.Add(modeCard); Gap(content, 14);
             content.Children.Add(Card(Stack(Label("ДОПОЛНИТЕЛЬНО"), Button("Стратегии и аргументы  ›", () => Navigate("Strategies"), false, false), Button("Списки и исключения  ›", () => Navigate("Lists"), false, false), Button("Журнал  ›", () => Navigate("Log"), false, false)))); Gap(content, 14);
             content.Children.Add(Card(Stack(Label("ИНСТРУМЕНТЫ FLOWSEAL"), Button("Оригинальный менеджер ↗", NativeManager), new Border { Height = 14 }, Text("Очистка кэша Discord и расширенные исправления доступны в оригинальном менеджере service.bat.", 12, Muted))));
@@ -1009,11 +1009,36 @@ namespace ZapretDesktop
             var p = value.Split('/'); System.Net.IPAddress ip; int bits;
             return p.Length <= 2 && System.Net.IPAddress.TryParse(p[0], out ip) && (p.Length == 1 || int.TryParse(p[1], out bits) && bits >= 0 && bits <= (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128));
         }
-        void ReplaceFake(string source, string target)
+        UIElement FakesCard()
         {
-            NeedBundle(); EnsureStopped(); if (String.IsNullOrEmpty(source)) throw new InvalidOperationException("Выберите .bin файл.");
-            string dest = Path.Combine(Root, "bin", target); if (File.Exists(dest)) File.Copy(dest, dest + ".ui-backup", true);
-            File.Copy(Path.Combine(Root, "bin", source), dest, true); AddLog(target + " ← " + source); SetStatus("Fake-пакет заменён, предыдущий сохранён в .ui-backup");
+            var box = Stack(Label("ПАКЕТЫ СТРАТЕГИИ"));
+            if (!Ready || selected == null) { box.Children.Add(Text("Выбери стратегию на главной.",14,Muted)); return Card(box); }
+            var strategy = selected;
+            try {
+                var slots = StrategyFakes.Slots(Bundle.RawArguments(strategy,Root,GameFilter.Read(Root)),Root);
+                box.Children.Add(Text(strategy.Name,16,null));
+                if (slots.Length == 0) { box.Children.Add(Text("У этой стратегии нет сменных .bin-пакетов.",14,Muted)); return Card(box); }
+                var names = Directory.GetFiles(Path.Combine(Root,"bin"),"*.bin").Select(Path.GetFileName).OrderBy(n=>n);
+                var slot = new ComboBox { ItemsSource=slots, SelectedIndex=0 };
+                var file = new ComboBox { ItemsSource=new[]{"Как в стратегии"}.Concat(names).ToList() };
+                var note = Text("",14,Muted);
+                Action refresh = () => {
+                    string source;
+                    bool custom = StrategyFakes.Read(strategy,Root).TryGetValue((string)slot.SelectedItem,out source);
+                    file.SelectedItem = custom ? source : "Как в стратегии";
+                    note.Text = "Сейчас используется " + (custom ? source : (string)slot.SelectedItem);
+                };
+                slot.SelectionChanged += (s,e) => refresh();
+                box.Children.Add(Label("Файл в стратегии")); box.Children.Add(slot); Gap(box,10);
+                box.Children.Add(Label("Использовать вместо него")); box.Children.Add(file); Gap(box,10);
+                box.Children.Add(Button("Сохранить выбор", () => {
+                    NeedBundle(); EnsureStopped();
+                    if (file.SelectedIndex < 0) throw new InvalidOperationException("Выбери доступный файл.");
+                    StrategyFakes.Set(strategy,Root,(string)slot.SelectedItem,file.SelectedIndex==0 ? null : (string)file.SelectedItem);
+                    refresh(); note.Text += ". При запуске из GUI выбор применится автоматически. Для службы переустанови её.";
+                },true)); box.Children.Add(note); refresh();
+            } catch (Exception error) { box.Children.Add(Text(error.Message,14,Muted)); }
+            return Card(box);
         }
         void NativeManager()
         {

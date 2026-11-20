@@ -50,54 +50,65 @@ namespace ZapretDesktop
             using (var p = new Process { StartInfo = new ProcessStartInfo(exe, String.Join(" ", args.Select(Engine.Quote))) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true } })
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
+                var exited = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                p.EnableRaisingEvents = true;
+                p.Exited += (s,e) => exited.TrySetResult(true);
                 token.ThrowIfCancellationRequested(); p.Start();
                 var output = p.StandardOutput.ReadToEndAsync(); var error = p.StandardError.ReadToEndAsync();
                 timeout.CancelAfter(6000);
                 using (timeout.Token.Register(() => { try { if (!p.HasExited) p.Kill(); } catch { } }))
                 {
-                    await Task.Run(() => p.WaitForExit());
-                    string text = await output, detail = await error;
+                    await exited.Task.ConfigureAwait(false);
+                    string text = await output.ConfigureAwait(false), detail = await error.ConfigureAwait(false);
                     token.ThrowIfCancellationRequested();
                     return new CurlReply { ExitCode = timeout.IsCancellationRequested ? 28 : p.ExitCode, Output = text.Trim(), Error = detail.Trim() };
                 }
             }
         }
+        static async Task<ProtocolCheck> CheckProtocol(string address, string protocol, SemaphoreSlim slots, CancellationToken token)
+        {
+            await slots.WaitAsync(token).ConfigureAwait(false);
+            try {
+                var reply = await Curl(address, protocol, token).ConfigureAwait(false);
+                return new ProtocolCheck { Protocol = protocol, Status = Classify(reply), HttpCode = reply.Output, Detail = reply.Error };
+            }
+            finally { slots.Release(); }
+        }
+        static async Task<string> CheckPing(string host, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            try {
+                using (var ping = new Ping()) {
+                    var reply = await ping.SendPingAsync(host, 1000).ConfigureAwait(false);
+                    if (reply.Status == IPStatus.Success) return reply.RoundtripTime + " ms";
+                }
+            } catch (PingException) { token.ThrowIfCancellationRequested(); }
+            return "Timeout";
+        }
         public static async Task<TestResult> Run(string name, List<Target> targets, CancellationToken token, Action<StandardRow> onRow = null)
         {
-            using (var limit = new SemaphoreSlim(Math.Min(16, Math.Max(8, Environment.ProcessorCount * 2))))
+            int concurrency = Math.Min(16, Math.Max(8, Environment.ProcessorCount * 2));
+            using (var limit = new SemaphoreSlim(concurrency))
+            using (var curlSlots = new SemaphoreSlim(concurrency))
             {
                 var tasks = targets.Select(async target => {
-                    await limit.WaitAsync(token);
+                    await limit.WaitAsync(token).ConfigureAwait(false);
                     try
                     {
-                        var row = new StandardRow { Name = target.Name, Checks = new List<ProtocolCheck>(), Ping = "Timeout" };
                         bool pingOnly = target.Address.StartsWith("PING:");
-                        if (!pingOnly)
-                        {
-                            foreach (var protocol in new[] { "HTTP", "TLS1.2", "TLS1.3" })
-                            {
-                                token.ThrowIfCancellationRequested();
-                                var reply = await Curl(target.Address, protocol, token);
-                                row.Checks.Add(new ProtocolCheck { Protocol = protocol, Status = Classify(reply), HttpCode = reply.Output, Detail = reply.Error });
-                            }
-                        }
                         string host = pingOnly ? target.Address.Substring(5) : new Uri(target.Address).Host;
-                        try
-                        {
-                            using (var ping = new Ping())
-                            {
-                                var reply = await ping.SendPingAsync(host, 1000);
-                                if (reply.Status == IPStatus.Success) row.Ping = reply.RoundtripTime + " ms";
-                            }
-                        }
-                        catch { token.ThrowIfCancellationRequested(); }
+                        var ping = CheckPing(host,token);
+                        var protocols = pingOnly ? new string[0] : new[]{"HTTP","TLS1.2","TLS1.3"};
+                        var checks = Task.WhenAll(protocols.Select(p=>CheckProtocol(target.Address,p,curlSlots,token)));
+                        await Task.WhenAll(ping,checks).ConfigureAwait(false);
+                        var row = new StandardRow { Name=target.Name, Ping=ping.Result, Checks=checks.Result.ToList() };
                         token.ThrowIfCancellationRequested();
                         if (onRow != null) onRow(row);
                         return row;
                     }
                     finally { limit.Release(); }
                 }).ToArray();
-                return Summarize(name, (await Task.WhenAll(tasks)).ToList());
+                return Summarize(name, (await Task.WhenAll(tasks).ConfigureAwait(false)).ToList());
             }
         }
         public static TestResult Summarize(string name, List<StandardRow> rows)

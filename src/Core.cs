@@ -176,6 +176,10 @@ namespace ZapretDesktop
         }
         public static string Arguments(Strategy strategy, string root, GameFilter filter)
         {
+            return StrategyFakes.Apply(strategy, root, RawArguments(strategy, root, filter));
+        }
+        internal static string RawArguments(Strategy strategy, string root, GameFilter filter)
+        {
             // Parse the data portion only. No batch commands are executed.
             string text = File.ReadAllText(strategy.File, Encoding.UTF8);
             var start = Regex.Match(text, "(?im)^start[^\\r\\n]*?winws\\.exe\"[ \\t]+(?<args>[^\\r\\n]*)");
